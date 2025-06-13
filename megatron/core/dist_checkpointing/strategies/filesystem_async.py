@@ -24,6 +24,8 @@ from torch.futures import Future
 
 from .async_utils import _disable_gc
 
+from vtimeline import TracePoint
+
 logger = logging.getLogger(__name__)
 
 WriteBucket = Tuple[Path, str, Tuple[list, list]]  # represents writes to a single file
@@ -188,6 +190,8 @@ class FileSystemWriterAsync(FileSystemWriter):
         """
         result = []
 
+        tp = TracePoint(f"preload-tensors-non-blocking-{non_blocking}", "FS")
+        tp.begin()
         for bucket in write_buckets:
             file_name, storage_key, (bytes_data, tensor_data) = bucket
             tensor_data = [
@@ -196,6 +200,7 @@ class FileSystemWriterAsync(FileSystemWriter):
             result.append((file_name, storage_key, (bytes_data, tensor_data)))
         if non_blocking:
             torch.cuda.synchronize()
+        tp.end()
         return result
 
     @staticmethod
@@ -226,6 +231,13 @@ class FileSystemWriterAsync(FileSystemWriter):
         """
         logger = logging.getLogger(__name__)
         w_start = time()
+
+        from vtimeline import tracepoint_module_setup, TracePoint, VLogger
+        tracepoint_module_setup()
+
+        tp = TracePoint(f"write-preloaded-data-multiproc-p{os.getpid()}", "FS")
+        tp.begin()
+
         write_results_or_exc: Union[dict, Exception] = dict()
         ctx = mp.get_context('fork')
         local_results_queue = ctx.Queue()
@@ -252,6 +264,8 @@ class FileSystemWriterAsync(FileSystemWriter):
             logger.debug('FileSystemWriterAsync: collecting worker results...')
 
             # To make sure all nodes are completed
+            collect_tp = TracePoint("collect-worker-results", "FS")
+            collect_tp.begin()
             count_queue.join()
             # At this point, all workers completed, so the queue should have exactly
             # `len(write_buckets)` items
@@ -263,6 +277,7 @@ class FileSystemWriterAsync(FileSystemWriter):
                         f'Unexpected empty `local_results_queue`'
                         f' (got only {proc_idx}/{len(write_buckets)} items)'
                     )
+                    VLogger.warn(f"Unexpected empty local_results_queue (got only {proc_idx}/{len(write_buckets)} items)")
                     break
                 else:
                     if isinstance(local_results_or_exc, Exception):
@@ -271,16 +286,19 @@ class FileSystemWriterAsync(FileSystemWriter):
                             f" an error: {local_results_or_exc}"
                         )
                         logger.error(err_msg)
+                        VLogger.warn(err_msg)
                         write_results_or_exc = local_results_or_exc
                         break
                     assert isinstance(local_results_or_exc, list), type(local_results_or_exc)
                     write_results_or_exc[local_proc_idx] = local_results_or_exc
                     p_list[local_proc_idx].join()
 
+            collect_tp.end()
             logger.debug('FileSystemWriterAsync: collected worker results successfully')
 
         global_results_queue.put(write_results_or_exc)
 
+        tp.end()
         w_end = time()
         logger.debug(f"{w_end}, rank: {rank}," f" write(sync,parallel): {w_end - w_start}")
 
@@ -309,6 +327,13 @@ class FileSystemWriterAsync(FileSystemWriter):
         """
         logger = logging.getLogger(__name__)
         logger.debug(f'{local_proc_idx} started')
+
+        from vtimeline import tracepoint_module_setup, TracePoint
+        tracepoint_module_setup()
+
+        tp = TracePoint(f"write-preloaded-data-proc-{local_proc_idx}-p-{os.getpid()}", "FS")
+        tp.begin()
+
         mem_before = _process_memory()
 
         local_results = []
@@ -343,6 +368,7 @@ class FileSystemWriterAsync(FileSystemWriter):
             f"{local_proc_idx} consumed: {mem_after - mem_before},"
             f" before: {mem_before}, after: {mem_after}"
         )
+        tp.end()
 
     def write_data(self, plan: SavePlan, planner: SavePlanner) -> Future[List[WriteResult]]:
         """Write all items from ``plan``."""

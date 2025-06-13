@@ -18,6 +18,8 @@ from torch import multiprocessing as mp
 
 from ..utils import debug_time
 
+from vtimeline import VLogger, TracePoint
+
 logger = logging.getLogger(__name__)
 
 
@@ -190,20 +192,22 @@ class TemporalAsyncCaller(AsyncCaller):
             # stage GPU tensors to its defined destination
             async_fn_args[1] = async_req.preload_fn()
 
-        rank = torch.distributed.get_rank()
-        start_sync = time()
+        tp = TracePoint(f"async-task-{async_req.call_idx}-D2H", "CKPT")
+
+        tp.begin()
         torch.cuda.synchronize()
-        end_sync = time()
-        logger.debug(f"rank: {rank}, takes {end_sync - start_sync} to finish D2H ")
+        tp.end()
 
         ctx = mp.get_context('fork')
+
+        tp = TracePoint(f"async-task-{async_req.call_idx}-schedule", "CKPT")
+        tp.begin()
         self.start_time = time()
         self.process = ctx.Process(
             target=async_req.async_fn, args=async_fn_args, kwargs=async_req.async_fn_kwargs
         )
         self.process.start()
-        init_time = time()
-        logger.debug(f"rank: {rank}, takes {init_time - self.start_time} to schedule async ckpt ")
+        tp.end()
 
     def is_current_async_call_done(self, blocking: bool = False, no_dist: bool = False) -> bool:
         """Check if async save is finished on all ranks.
@@ -226,6 +230,8 @@ class TemporalAsyncCaller(AsyncCaller):
         # as torch.distributed.barrier (single integer all-reduce)
         is_alive = int(self.process.is_alive()) if self.process is not None else 0
         is_done = not is_alive if no_dist else self.sync_all_async_calls(is_alive)
+
+        VLogger.info("current async task is alive: {} done: {}".format(is_alive, is_done))
 
         if is_done or blocking:
             # Process join is called in the following cases
@@ -538,9 +544,12 @@ class AsyncCallsQueue:
                 blocking, no_dist
             )
             if not next_async_done:
+                VLogger.info("async task not done ... wait next finalize")
                 break
             with debug_time("finalize", logger):
                 call_idx, _, async_request = self.async_calls.popleft()
+                tp = TracePoint(f"finalize-async-request-{call_idx}", "CKPT")
+                tp.begin()
                 for finalize_fn in async_request.finalize_fns:
                     finalize_fn()
                 ten = torch.tensor([call_idx], dtype=torch.int, device=torch.cuda.current_device())
@@ -548,6 +557,7 @@ class AsyncCallsQueue:
                 assert ten.item() == call_idx, 'Unmatched async calls. '
                 'That probably means not all ranks are participating in async finalization'
                 call_idx_finalized.append(call_idx)
+                tp.end()
         return call_idx_finalized
 
     def get_num_unfinalized_calls(self):

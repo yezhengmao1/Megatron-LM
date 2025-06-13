@@ -9,6 +9,7 @@ import logging
 from megatron.core.dist_checkpointing.strategies.async_utils import AsyncCallsQueue, AsyncRequest
 from megatron.training import get_args
 from megatron.training.utils import print_rank_0
+from vtimeline import VLogger
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +50,7 @@ def maybe_finalize_async_save(blocking: bool = False, terminate=False):
 
     if blocking and not is_empty_async_queue():
         print_rank_0('Unfinalized async checkpoint saves. Finalizing them synchronously now.')
+        VLogger.warn('Unfinalized async checkpoint saves. Finalizing them synchronously now.')
 
     _async_calls_queue.maybe_finalize_async_calls(blocking, no_dist=False)
 

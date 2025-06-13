@@ -33,6 +33,8 @@ from megatron.training.yaml_arguments import validate_yaml
 
 logger = logging.getLogger(__name__)
 
+from vtimeline import cudavtimeline_module_setup, tracepoint_module_setup
+
 
 def initialize_megatron(
     extra_args_provider=None,
@@ -91,6 +93,8 @@ def initialize_megatron(
 
     # set logging level
     setup_logging()
+    tracepoint_module_setup()
+    cudavtimeline_module_setup()
 
     # init rerun state
     def state_save_func():

@@ -20,6 +20,8 @@ from megatron.core.utils import (
     get_model_xattn,
 )
 
+from vtimeline import TracePoint
+
 # Types
 Shape = Union[List[int], torch.Size]
 
@@ -255,6 +257,9 @@ def forward_step(
     if config.timers is not None:
         config.timers('forward-compute', log_level=2).start()
 
+    tp = TracePoint("forward-compute", "PP")
+    tp.begin()
+
     if is_first_microbatch and hasattr(model, 'set_is_first_microbatch'):
         model.set_is_first_microbatch()
     if current_microbatch is not None:
@@ -301,6 +306,7 @@ def forward_step(
             data = loss_func(output_tensor, non_loss_data=True)
             forward_data_store.append(data)
 
+    tp.end()
     if config.timers is not None:
         config.timers('forward-compute').stop()
 
@@ -365,6 +371,9 @@ def backward_step(input_tensor, output_tensor, output_tensor_grad, model_type, c
     if config.timers is not None:
         config.timers('backward-compute', log_level=2).start()
 
+    tp = TracePoint("backward-compute", "PP")
+    tp.begin()
+
     # Retain the grad on the input_tensor.
     unwrap_input_tensor_grad = False
     if not isinstance(input_tensor, list):
@@ -416,6 +425,8 @@ def backward_step(input_tensor, output_tensor, output_tensor_grad, model_type, c
             input_tensor_grad[-1].add_(output_tensor_grad[1])
     if unwrap_input_tensor_grad:
         input_tensor_grad = input_tensor_grad[0]
+
+    tp.end()
 
     if config.timers is not None:
         config.timers('backward-compute').stop()

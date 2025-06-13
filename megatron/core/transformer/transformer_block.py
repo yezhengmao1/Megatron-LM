@@ -25,6 +25,8 @@ from megatron.core.transformer.transformer_layer import (
 from megatron.core.transformer.utils import sharded_state_dict_default
 from megatron.core.utils import WrappedTensor, deprecate_inference_params, make_viewless_tensor
 
+from vtimeline import TracePoint
+
 try:
     from megatron.core.extensions.transformer_engine import (
         TENorm,
@@ -520,6 +522,8 @@ class TransformerBlock(MegatronModule):
                 )
             else:
                 for l_no, layer in enumerate(self.layers):
+                    ltp = TracePoint(f"TransformerLayer-{l_no}", "Model")
+                    ltp.begin()
                     inner_fp8_context = (
                         get_fp8_context(self.config, layer.layer_number - 1)
                         if use_inner_fp8_context
@@ -546,6 +550,7 @@ class TransformerBlock(MegatronModule):
                         and self.group_prefetch_offload_commit_async is not None
                     ):
                         hidden_states = self.group_prefetch_offload_commit_async(hidden_states)
+                    ltp.end()
 
         # Final layer norm.
         if self.final_layernorm is not None:

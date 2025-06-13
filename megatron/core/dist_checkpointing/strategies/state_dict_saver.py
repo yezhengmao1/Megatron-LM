@@ -14,6 +14,8 @@ from torch.distributed.checkpoint.metadata import STATE_DICT_TYPE, Metadata
 from torch.distributed.checkpoint.planner import SavePlan, SavePlanner
 from torch.distributed.checkpoint.utils import _DistWrapper, _get_failure_dict
 
+from vtimeline import TracePoint
+
 if TYPE_CHECKING:
     from .filesystem_async import FileSystemWriterAsync
     from .torch import MCoreSavePlanner
@@ -125,6 +127,8 @@ def save_state_dict_async_plan(
     # the metadata but prepare the plans independently on each rank.
     # In the worst case we have to reduce_scatter all the plans.
     start_plan = time()
+    plan_tp = TracePoint("storage-prepare-plan", "CKPT")
+    plan_tp.begin()
     if validated_cache_reuse and cached_central_plan:
         logger.debug(f"rank: {rank}, Passed cache reusable")
         local_step()
@@ -152,12 +156,16 @@ def save_state_dict_async_plan(
         central_plan = dist_wrapper.reduce_scatter("plan", local_step, global_step)
     central_plan = planner.finish_plan(central_plan)
     end_plan = time()
+    plan_tp.end()
     logger.debug(f"rank: {rank}, plan time: {end_plan - start_plan}")
     # Prepare async writing of tensors.
     # The `storage_writer` will store the information about tensors it needs to save
+    prepare_write_tp = TracePoint("prepare-write-data", "CKPT")
+    prepare_write_tp.begin()
     start = time()
     storage_writer.prepare_write_data(central_plan, planner)
     end = time()
+    prepare_write_tp.end()
     logger.debug(f"{time()} rank: {rank}, write(async) time: {end - start}")
     return (
         (storage_writer, global_metadata, dist_wrapper),
