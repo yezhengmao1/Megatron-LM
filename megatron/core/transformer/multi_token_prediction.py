@@ -675,6 +675,40 @@ def get_mtp_ranks(pp_ranks: List[int], config: TransformerConfig) -> List[int]:
     return list(mtp_ranks)
 
 
+def get_embedding_ranks_with_mtp(
+    pp_ranks: List[int],
+    config: TransformerConfig,
+    share_embeddings_and_output_weights: bool,
+    vp_stage: Optional[int] = None,
+) -> List[int]:
+    """Get pipeline ranks that hold tied copies of the input embedding.
+
+    Standalone MTP stages own a copy of the input embedding and must participate in its
+    parameter and gradient collectives. The last pipeline rank participates only when the
+    output weight is tied or when that rank itself hosts MTP.
+
+    Args:
+        pp_ranks: Global ranks in one pipeline-parallel group.
+        config: Transformer config containing the MTP layout.
+        share_embeddings_and_output_weights: Whether the output weight is tied to the input
+            embedding.
+        vp_stage: Unused compatibility argument for the embedding-rank callback interface.
+
+    Returns:
+        Ordered global ranks for the embedding process group.
+    """
+    if len(pp_ranks) < 2:
+        return pp_ranks
+
+    first, last = pp_ranks[0], pp_ranks[-1]
+    mtp_ranks = sorted(set(get_mtp_ranks(pp_ranks, config)))
+
+    if not share_embeddings_and_output_weights:
+        return [first] + [rank for rank in mtp_ranks if rank != first]
+
+    return [first] + [rank for rank in mtp_ranks if rank not in (first, last)] + [last]
+
+
 def get_mtp_layer_offset(config: TransformerConfig, vp_stage: Optional[int] = None) -> int:
     """Get the offset of the MTP layer."""
     if config.pipeline_model_parallel_size > 1:
@@ -1816,7 +1850,7 @@ class MultiTokenPredictionBlock(MegatronModule):
 
         for iteration in range(self.config.mtp_num_layers):
             layer_idx = 0 if self.mtp_use_repeated_layer else iteration
-            (hidden_states, input_ids, position_ids, padding_mask) = self.layers[layer_idx](
+            hidden_states, input_ids, position_ids, padding_mask = self.layers[layer_idx](
                 input_ids=input_ids,
                 position_ids=position_ids,
                 hidden_states=hidden_states,

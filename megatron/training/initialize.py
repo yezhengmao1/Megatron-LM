@@ -359,6 +359,21 @@ def _initialize_distributed(get_embedding_ranks, get_position_embedding_ranks, s
         if mpu.model_parallel_is_initialized():
             print("model parallel is already initialized")
         else:
+            if get_embedding_ranks is None and args.mtp_num_layers:
+                from megatron.core.transformer.multi_token_prediction import (
+                    get_embedding_ranks_with_mtp,
+                )
+
+                def _get_embedding_ranks(pp_ranks, vp_stage=None):
+                    return get_embedding_ranks_with_mtp(
+                        pp_ranks,
+                        args,
+                        not args.untie_embeddings_and_output_weights,
+                        vp_stage,
+                    )
+
+                get_embedding_ranks = _get_embedding_ranks
+
             if args.gtp_weight_remat_size > 1 or args.expert_gtp_weight_remat_size > 1:
                 from megatron.core.tensor_parallel.gtp_api import HAVE_GTP
 

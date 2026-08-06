@@ -26,9 +26,11 @@ from megatron.core.transformer.multi_token_prediction import (
     MTPLossLoggingHelper,
     MultiTokenPredictionBlock,
     _mtp_logits_are_vocab_sharded,
+    get_embedding_ranks_with_mtp,
     process_mtp_loss,
     roll_tensor,
 )
+from megatron.core.transformer.pipeline_parallel_layer_layout import PipelineParallelLayerLayout
 from megatron.core.transformer.transformer_config import TransformerConfig
 from megatron.core.utils import get_batch_on_this_cp_rank, is_te_min_version, unwrap_model
 from megatron.training.argument_utils import gpt_config_from_args, hybrid_config_from_args
@@ -50,6 +52,25 @@ else:
     TEColumnParallelGroupedLinear = None
 
 _SEED = 42
+
+
+@pytest.mark.parametrize(
+    ("share_embeddings_and_output_weights", "expected_ranks"), [(True, [0, 2, 3]), (False, [0, 2])]
+)
+def test_embedding_ranks_with_standalone_mtp(share_embeddings_and_output_weights, expected_ranks):
+    config = types.SimpleNamespace(
+        mtp_num_layers=1,
+        pipeline_model_parallel_layout=PipelineParallelLayerLayout.from_str(
+            "Ettt|tt|tt|ttt|ttt|ttt|ttt|ttt|" "ttt|ttt|ttt|ttt|ttt|ttt|tm|L",
+            pipeline_model_parallel_size=4,
+        ),
+    )
+
+    actual_ranks = get_embedding_ranks_with_mtp(
+        [0, 1, 2, 3], config, share_embeddings_and_output_weights
+    )
+
+    assert actual_ranks == expected_ranks
 
 
 class TestMultiTokenPredictionLayer:
